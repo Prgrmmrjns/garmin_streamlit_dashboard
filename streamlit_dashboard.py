@@ -3848,27 +3848,24 @@ def main():
         with chat_sidebar:
             st.markdown("#### 💬 Conversations")
             
-            # New Chat button
-            if st.button("➕ New Chat", use_container_width=True, type="primary"):
+            # New Chat button - no rerun, just update state
+            if st.button("➕ New Chat", use_container_width=True, type="primary", key="new_chat_btn"):
                 st.session_state.current_chat_id = str(uuid.uuid4())
                 st.session_state.chat_messages = []
                 st.session_state.chat_title = "New Chat"
                 st.session_state.pending_workout = None
                 st.session_state.pending_workout_params = None
-                st.rerun()
             
             st.markdown("---")
             
-            # Function Calling Toggle
+            # Function Calling Toggle - no rerun needed, toggle updates automatically
             st.markdown("#### ⚙️ Settings")
-            enable_fc = st.toggle(
+            st.session_state.enable_function_calling = st.toggle(
                 "🔧 Allow Function Calling",
                 value=st.session_state.enable_function_calling,
-                help="Enable Lixxi to create and schedule workouts on your Garmin"
+                help="Enable Lixxi to create and schedule workouts on your Garmin",
+                key="fc_toggle"
             )
-            if enable_fc != st.session_state.enable_function_calling:
-                st.session_state.enable_function_calling = enable_fc
-                st.rerun()
             
             if st.session_state.enable_function_calling:
                 st.success("✅ Workout creation enabled")
@@ -3883,34 +3880,36 @@ def main():
             chat_list = load_chat_list()
             
             if chat_list:
-                for chat_info in chat_list[:12]:  # Show last 12 chats
-                    chat_id = chat_info['id']
-                    title = chat_info['title'][:22] + "..." if len(chat_info['title']) > 22 else chat_info['title']
-                    
-                    col1, col2 = st.columns([4, 1])
-                    
-                    with col1:
-                        is_current = st.session_state.current_chat_id == chat_id
-                        btn_type = "primary" if is_current else "secondary"
-                        
-                        if st.button(f"💬 {title}", key=f"load_{chat_id}", use_container_width=True, type=btn_type):
-                            chat_data = load_chat(chat_id)
-                            if chat_data:
-                                st.session_state.current_chat_id = chat_id
-                                st.session_state.chat_messages = chat_data.get('messages', [])
-                                st.session_state.chat_title = chat_data.get('title', 'Chat')
-                                st.session_state.pending_workout = None
-                                st.session_state.pending_workout_params = None
-                                st.rerun()
-                    
-                    with col2:
-                        if st.button("🗑️", key=f"del_{chat_id}", help="Delete chat"):
-                            delete_chat(chat_id)
-                            if st.session_state.current_chat_id == chat_id:
-                                st.session_state.current_chat_id = None
-                                st.session_state.chat_messages = []
-                                st.session_state.chat_title = "New Chat"
-                            st.rerun()
+                # Use selectbox instead of buttons to avoid rerun issues
+                chat_options = ["-- Select a chat --"] + [f"{c['title'][:30]}..." if len(c['title']) > 30 else c['title'] for c in chat_list[:12]]
+                chat_ids = [None] + [c['id'] for c in chat_list[:12]]
+                
+                selected_idx = st.selectbox(
+                    "Load conversation:",
+                    range(len(chat_options)),
+                    format_func=lambda i: chat_options[i],
+                    key="chat_selector",
+                    label_visibility="collapsed"
+                )
+                
+                if selected_idx > 0:
+                    selected_chat_id = chat_ids[selected_idx]
+                    if st.session_state.current_chat_id != selected_chat_id:
+                        chat_data = load_chat(selected_chat_id)
+                        if chat_data:
+                            st.session_state.current_chat_id = selected_chat_id
+                            st.session_state.chat_messages = chat_data.get('messages', [])
+                            st.session_state.chat_title = chat_data.get('title', 'Chat')
+                            st.session_state.pending_workout = None
+                            st.session_state.pending_workout_params = None
+                
+                # Delete current chat button
+                if st.session_state.current_chat_id:
+                    if st.button("🗑️ Delete Current Chat", key="delete_chat_btn", use_container_width=True):
+                        delete_chat(st.session_state.current_chat_id)
+                        st.session_state.current_chat_id = None
+                        st.session_state.chat_messages = []
+                        st.session_state.chat_title = "New Chat"
             else:
                 st.info("No saved chats yet.")
         
@@ -3919,94 +3918,31 @@ def main():
             if st.session_state.enable_function_calling:
                 st.info("🔧 **Function Calling Enabled** - Ask me to create a workout and I'll help you build it!")
             
-            # Display chat messages
-            chat_container = st.container()
+            # Create a container with fixed height for messages
+            messages_container = st.container(height=450)
             
-            with chat_container:
+            with messages_container:
                 if not st.session_state.chat_messages:
                     # Welcome message
                     st.markdown(f"""
-                    <div style="text-align: center; padding: 2rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 1rem; color: white; margin-bottom: 1rem;">
-                        <h2>👋 Hi! I'm {CHATBOT_NAME}</h2>
-                        <p>I'm your personal AI fitness assistant. I have access to your Garmin data and can help you with:</p>
-                        <ul style="text-align: left; display: inline-block;">
-                            <li>📊 Analyzing your activity and fitness trends</li>
-                            <li>😴 Understanding your sleep patterns</li>
-                            <li>💪 Suggesting workout improvements</li>
-                            <li>❤️ Explaining health metrics (HRV, Body Battery, etc.)</li>
-                            <li>🏋️ <strong>Creating & scheduling workouts</strong> (enable Function Calling)</li>
-                        </ul>
-                        <p><strong>Try asking me something!</strong></p>
-                    </div>
+<div style="text-align: center; padding: 2rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 1rem; color: white; margin-bottom: 1rem;">
+    <h2>👋 Hi! I'm {CHATBOT_NAME}</h2>
+    <p>I'm your personal AI fitness assistant. I have access to your Garmin data and can help you with:</p>
+    <ul style="text-align: left; display: inline-block;">
+        <li>📊 Analyzing your activity and fitness trends</li>
+        <li>😴 Understanding your sleep patterns</li>
+        <li>💪 Suggesting workout improvements</li>
+        <li>❤️ Explaining health metrics (HRV, Body Battery, etc.)</li>
+        <li>🏋️ <strong>Creating & scheduling workouts</strong> (enable Function Calling)</li>
+    </ul>
+    <p><strong>Try asking me something!</strong></p>
+</div>
                     """, unsafe_allow_html=True)
-                    
-                    # Suggested prompts
-                    st.markdown("**💡 Suggested questions:**")
-                    suggested_cols = st.columns(2)
-                    
-                    suggestions = [
-                        "How was my activity this week?",
-                        "Am I getting enough sleep?",
-                        "What's my stress level like?",
-                        "Create a 30-minute interval run for me"
-                    ]
-                    
-                    for i, suggestion in enumerate(suggestions):
-                        with suggested_cols[i % 2]:
-                            if st.button(f"💬 {suggestion}", key=f"suggest_{i}", use_container_width=True):
-                                if not st.session_state.current_chat_id:
-                                    st.session_state.current_chat_id = str(uuid.uuid4())
-                                
-                                st.session_state.chat_messages.append({
-                                    "role": "user",
-                                    "content": suggestion
-                                })
-                                
-                                user_name = st.session_state.get("user_display_name")
-                                garmin_context = get_garmin_context(daily_df, workouts_df, days=14, user_name=user_name)
-                                with st.spinner(f"{CHATBOT_NAME} is thinking..."):
-                                    response = call_mistral_api(
-                                        st.session_state.chat_messages,
-                                        "",
-                                        garmin_context,
-                                        enable_tools=st.session_state.enable_function_calling
-                                    )
-                                
-                                # Handle response (may include tool calls)
-                                if response.get("tool_calls") and st.session_state.enable_function_calling:
-                                    # Process tool call
-                                    for tool_call in response["tool_calls"]:
-                                        if tool_call["function"]["name"] == "create_workout":
-                                            args = json.loads(tool_call["function"]["arguments"])
-                                            workout_json, duration, summary = build_workout_json(args)
-                                            st.session_state.pending_workout = workout_json
-                                            st.session_state.pending_workout_params = args
-                                            
-                                            # Add AI message about the workout
-                                            st.session_state.chat_messages.append({
-                                                "role": "assistant",
-                                                "content": f"I've created a workout for you! Here's what I'm proposing:\n\n{summary}\n\n**Please review and confirm below to schedule this workout on your Garmin.**"
-                                            })
-                                else:
-                                    st.session_state.chat_messages.append({
-                                        "role": "assistant",
-                                        "content": response.get("content", "I couldn't process that request.")
-                                    })
-                                
-                                st.session_state.chat_title = generate_chat_title(suggestion)
-                                save_chat(
-                                    st.session_state.current_chat_id,
-                                    st.session_state.chat_title,
-                                    st.session_state.chat_messages
-                                )
-                                st.rerun()
-                
                 else:
                     # Display existing messages
                     for msg in st.session_state.chat_messages:
                         role = msg["role"]
                         content = msg["content"]
-                        
                         if role == "user":
                             with st.chat_message("user", avatar="👤"):
                                 st.markdown(content)
@@ -4149,112 +4085,107 @@ def main():
                                         
                                         st.success(f"✅ Workout '{edited_name}' scheduled for {edited_date}!")
                                         st.balloons()
-                                        st.rerun()
                                     else:
                                         st.error("❌ Failed to create workout on Garmin")
                                 except Exception as e:
                                     st.error(f"❌ Error: {str(e)}")
                 
                 with btn_col2:
-                    if st.button("🔄 Modify Request", use_container_width=True):
+                    if st.button("🔄 Modify Request", use_container_width=True, key="modify_workout_btn"):
                         st.session_state.pending_workout = None
                         st.session_state.pending_workout_params = None
+                        modify_msg = "No problem! What changes would you like to make to the workout? You can tell me to:\n- Change the duration\n- Add more intervals\n- Adjust the intensity/HR zones\n- Change the sport type\n- Or describe a completely different workout"
                         st.session_state.chat_messages.append({
                             "role": "assistant",
-                            "content": "No problem! What changes would you like to make to the workout? You can tell me to:\n- Change the duration\n- Add more intervals\n- Adjust the intensity/HR zones\n- Change the sport type\n- Or describe a completely different workout"
+                            "content": modify_msg
                         })
                         save_chat(
                             st.session_state.current_chat_id,
                             st.session_state.chat_title,
                             st.session_state.chat_messages
                         )
-                        st.rerun()
+                        messages_container.chat_message("assistant", avatar="🤖").markdown(modify_msg)
                 
                 with btn_col3:
-                    if st.button("❌ Cancel", use_container_width=True):
+                    if st.button("❌ Cancel", use_container_width=True, key="cancel_workout_btn"):
                         st.session_state.pending_workout = None
                         st.session_state.pending_workout_params = None
+                        cancel_msg = "No worries, I've cancelled the workout. Let me know if you'd like to try something different!"
                         st.session_state.chat_messages.append({
                             "role": "assistant",
-                            "content": "No worries, I've cancelled the workout. Let me know if you'd like to try something different!"
+                            "content": cancel_msg
                         })
                         save_chat(
                             st.session_state.current_chat_id,
                             st.session_state.chat_title,
                             st.session_state.chat_messages
                         )
-                        st.rerun()
+                        messages_container.chat_message("assistant", avatar="🤖").markdown(cancel_msg)
             
-            # Chat input
-            st.markdown("---")
-            
-            user_input = st.chat_input(f"Ask {CHATBOT_NAME} anything about your fitness data...")
-            
-            if user_input:
+            # Chat input - placed after messages container
+            if prompt := st.chat_input(f"Ask {CHATBOT_NAME} anything about your fitness data...", key="chat_input_main"):
                 # Create new chat ID if needed
                 if not st.session_state.current_chat_id:
                     st.session_state.current_chat_id = str(uuid.uuid4())
                 
-                # Add user message
+                # Add user message to state
                 st.session_state.chat_messages.append({
                     "role": "user",
-                    "content": user_input
+                    "content": prompt
                 })
                 
-                # Display user message immediately
-                with st.chat_message("user", avatar="👤"):
-                    st.markdown(user_input)
+                # Display user message in the container
+                messages_container.chat_message("user", avatar="👤").markdown(prompt)
                 
                 # Generate title from first message if new chat
                 if len(st.session_state.chat_messages) == 1:
-                    st.session_state.chat_title = generate_chat_title(user_input)
+                    st.session_state.chat_title = generate_chat_title(prompt)
                 
                 # Get Garmin context with user name
                 user_name = st.session_state.get("user_display_name")
                 garmin_context = get_garmin_context(daily_df, workouts_df, days=14, user_name=user_name)
                 
-                # Display assistant response with streaming effect
-                with st.chat_message("assistant", avatar="🤖"):
-                    with st.spinner(f"{CHATBOT_NAME} is thinking..."):
-                        response = call_mistral_api(
-                            st.session_state.chat_messages,
-                            "",
-                            garmin_context,
-                            enable_tools=st.session_state.enable_function_calling
-                        )
-                    
-                    # Handle response
-                    if response.get("tool_calls") and st.session_state.enable_function_calling:
-                        # Process tool call for workout creation
-                        for tool_call in response["tool_calls"]:
-                            if tool_call["function"]["name"] == "create_workout":
-                                args = json.loads(tool_call["function"]["arguments"])
-                                
-                                # Set default date if not provided
-                                if "schedule_date" not in args:
-                                    args["schedule_date"] = date.today().isoformat()
-                                
-                                workout_json, duration, summary = build_workout_json(args)
-                                st.session_state.pending_workout = workout_json
-                                st.session_state.pending_workout_params = args
-                                
-                                # Display and store AI message about the workout
-                                assistant_content = f"I've designed a workout for you! 🏋️\n\n{summary}\n\n**Please review the details above and click 'Confirm & Schedule' to add it to your Garmin, or 'Modify Request' to make changes.**"
-                                st.markdown(assistant_content)
-                                st.session_state.chat_messages.append({
-                                    "role": "assistant",
-                                    "content": assistant_content
-                                })
-                    else:
-                        # Regular text response - display immediately
-                        content = response.get("content", "I couldn't process that request.")
-                        st.markdown(content)
-                        st.session_state.chat_messages.append({
-                            "role": "assistant",
-                            "content": content
-                        })
+                # Get AI response
+                with st.spinner(f"{CHATBOT_NAME} is thinking..."):
+                    response = call_mistral_api(
+                        st.session_state.chat_messages,
+                        "",
+                        garmin_context,
+                        enable_tools=st.session_state.enable_function_calling
+                    )
                 
-                # Save chat (no rerun needed - messages already displayed)
+                # Handle response
+                if response.get("tool_calls") and st.session_state.enable_function_calling:
+                    # Process tool call for workout creation
+                    for tool_call in response["tool_calls"]:
+                        if tool_call["function"]["name"] == "create_workout":
+                            args = json.loads(tool_call["function"]["arguments"])
+                            
+                            # Set default date if not provided
+                            if "schedule_date" not in args:
+                                args["schedule_date"] = date.today().isoformat()
+                            
+                            workout_json, duration, summary = build_workout_json(args)
+                            st.session_state.pending_workout = workout_json
+                            st.session_state.pending_workout_params = args
+                            
+                            # Store and display AI message about the workout
+                            assistant_content = f"I've designed a workout for you! 🏋️\n\n{summary}\n\n**Scroll down to review and confirm the workout.**"
+                            st.session_state.chat_messages.append({
+                                "role": "assistant",
+                                "content": assistant_content
+                            })
+                            messages_container.chat_message("assistant", avatar="🤖").markdown(assistant_content)
+                else:
+                    # Regular text response
+                    content = response.get("content", "I couldn't process that request.")
+                    st.session_state.chat_messages.append({
+                        "role": "assistant",
+                        "content": content
+                    })
+                    messages_container.chat_message("assistant", avatar="🤖").markdown(content)
+                
+                # Save chat
                 save_chat(
                     st.session_state.current_chat_id,
                     st.session_state.chat_title,
