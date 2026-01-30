@@ -1029,12 +1029,18 @@ CHATS_DIR = DATA_DIR / "chats"
 CHATS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def get_garmin_context(daily_df, workouts_df, days=7):
+def get_garmin_context(daily_df, workouts_df, days=7, user_name=None):
     """
     Generate a context summary of the user's Garmin data for the AI chatbot.
     """
     context_parts = []
     today = date.today()
+    
+    # Include user's name if available
+    if user_name:
+        context_parts.append(f"=== USER INFORMATION ===")
+        context_parts.append(f"The user's name is: {user_name}")
+        context_parts.append(f"Always address them by name when appropriate.\n")
     
     if daily_df is not None and not daily_df.empty:
         # Recent daily summary
@@ -2006,6 +2012,15 @@ def main():
     # Load workouts data
     workouts_df = load_workouts()
     scheduled_workouts_df = load_scheduled_workouts()
+
+    # Fetch and store user display name for chatbot context
+    if "user_display_name" not in st.session_state:
+        try:
+            garmin_client_for_name, _ = get_garmin_client()
+            raw_name = get_display_name(garmin_client_for_name) if garmin_client_for_name else None
+            st.session_state.user_display_name = raw_name if raw_name and len(str(raw_name)) < 32 else None
+        except Exception:
+            st.session_state.user_display_name = None
 
     # Tabs (Home first as default)
     tab_home, tab_daily, tab_high_res, tab_fitness, tab_workouts, tab_goals, tab_insights, tab_lixxi = st.tabs(
@@ -3947,7 +3962,8 @@ def main():
                                     "content": suggestion
                                 })
                                 
-                                garmin_context = get_garmin_context(daily_df, workouts_df, days=14)
+                                user_name = st.session_state.get("user_display_name")
+                                garmin_context = get_garmin_context(daily_df, workouts_df, days=14, user_name=user_name)
                                 with st.spinner(f"{CHATBOT_NAME} is thinking..."):
                                     response = call_mistral_api(
                                         st.session_state.chat_messages,
@@ -4185,58 +4201,65 @@ def main():
                     "content": user_input
                 })
                 
+                # Display user message immediately
+                with st.chat_message("user", avatar="👤"):
+                    st.markdown(user_input)
+                
                 # Generate title from first message if new chat
                 if len(st.session_state.chat_messages) == 1:
                     st.session_state.chat_title = generate_chat_title(user_input)
                 
-                # Get Garmin context
-                garmin_context = get_garmin_context(daily_df, workouts_df, days=14)
+                # Get Garmin context with user name
+                user_name = st.session_state.get("user_display_name")
+                garmin_context = get_garmin_context(daily_df, workouts_df, days=14, user_name=user_name)
                 
-                # Call Mistral API with function calling if enabled
-                with st.spinner(f"{CHATBOT_NAME} is thinking..."):
-                    response = call_mistral_api(
-                        st.session_state.chat_messages,
-                        "",
-                        garmin_context,
-                        enable_tools=st.session_state.enable_function_calling
-                    )
+                # Display assistant response with streaming effect
+                with st.chat_message("assistant", avatar="🤖"):
+                    with st.spinner(f"{CHATBOT_NAME} is thinking..."):
+                        response = call_mistral_api(
+                            st.session_state.chat_messages,
+                            "",
+                            garmin_context,
+                            enable_tools=st.session_state.enable_function_calling
+                        )
+                    
+                    # Handle response
+                    if response.get("tool_calls") and st.session_state.enable_function_calling:
+                        # Process tool call for workout creation
+                        for tool_call in response["tool_calls"]:
+                            if tool_call["function"]["name"] == "create_workout":
+                                args = json.loads(tool_call["function"]["arguments"])
+                                
+                                # Set default date if not provided
+                                if "schedule_date" not in args:
+                                    args["schedule_date"] = date.today().isoformat()
+                                
+                                workout_json, duration, summary = build_workout_json(args)
+                                st.session_state.pending_workout = workout_json
+                                st.session_state.pending_workout_params = args
+                                
+                                # Display and store AI message about the workout
+                                assistant_content = f"I've designed a workout for you! 🏋️\n\n{summary}\n\n**Please review the details above and click 'Confirm & Schedule' to add it to your Garmin, or 'Modify Request' to make changes.**"
+                                st.markdown(assistant_content)
+                                st.session_state.chat_messages.append({
+                                    "role": "assistant",
+                                    "content": assistant_content
+                                })
+                    else:
+                        # Regular text response - display immediately
+                        content = response.get("content", "I couldn't process that request.")
+                        st.markdown(content)
+                        st.session_state.chat_messages.append({
+                            "role": "assistant",
+                            "content": content
+                        })
                 
-                # Handle response
-                if response.get("tool_calls") and st.session_state.enable_function_calling:
-                    # Process tool call for workout creation
-                    for tool_call in response["tool_calls"]:
-                        if tool_call["function"]["name"] == "create_workout":
-                            args = json.loads(tool_call["function"]["arguments"])
-                            
-                            # Set default date if not provided
-                            if "schedule_date" not in args:
-                                args["schedule_date"] = date.today().isoformat()
-                            
-                            workout_json, duration, summary = build_workout_json(args)
-                            st.session_state.pending_workout = workout_json
-                            st.session_state.pending_workout_params = args
-                            
-                            # Add AI message about the workout
-                            st.session_state.chat_messages.append({
-                                "role": "assistant",
-                                "content": f"I've designed a workout for you! 🏋️\n\n{summary}\n\n**Please review the details above and click 'Confirm & Schedule' to add it to your Garmin, or 'Modify Request' to make changes.**"
-                            })
-                else:
-                    # Regular text response
-                    content = response.get("content", "I couldn't process that request.")
-                    st.session_state.chat_messages.append({
-                        "role": "assistant",
-                        "content": content
-                    })
-                
-                # Save chat
+                # Save chat (no rerun needed - messages already displayed)
                 save_chat(
                     st.session_state.current_chat_id,
                     st.session_state.chat_title,
                     st.session_state.chat_messages
                 )
-                
-                st.rerun()
             
             # Show current chat info
             if st.session_state.current_chat_id and st.session_state.chat_messages:
