@@ -74,8 +74,74 @@ st.set_page_config(
 
 # --- GARMIN CREDENTIALS LOGIN ---
 
+def _has_preconfigured_credentials():
+    """Check if Garmin credentials are preconfigured in secrets or environment."""
+    email = os.getenv("GARMIN_EMAIL", "").strip().strip('"')
+    password = os.getenv("GARMIN_PASSWORD", "").strip().strip('"')
+    return bool(email and password)
+
+def _get_dashboard_password():
+    """Get the dashboard password from secrets or environment."""
+    return os.getenv("DASHBOARD_PASSWORD", "").strip().strip('"')
+
 def check_credentials():
-    """Returns `True` if the user has entered valid Garmin credentials."""
+    """Returns `True` if the user has entered valid credentials."""
+    
+    # Check if already authenticated
+    if st.session_state.get("credentials_valid", False):
+        return True
+    
+    has_preconfigured = _has_preconfigured_credentials()
+    dashboard_password = _get_dashboard_password()
+    
+    if has_preconfigured and dashboard_password:
+        # MODE 1: Credentials are preconfigured - only ask for dashboard password
+        return _check_dashboard_password_only(dashboard_password)
+    else:
+        # MODE 2: No preconfigured credentials - ask for full Garmin login
+        return _check_full_garmin_login()
+
+def _check_dashboard_password_only(correct_password):
+    """Show password-only login when Garmin credentials are preconfigured."""
+    
+    def password_entered():
+        """Check if entered password matches."""
+        entered = st.session_state.get("dashboard_password_input", "").strip()
+        if entered == correct_password:
+            st.session_state["credentials_valid"] = True
+            st.session_state["login_error"] = None
+            # Store preconfigured credentials in session state
+            st.session_state["garmin_email"] = os.getenv("GARMIN_EMAIL", "").strip().strip('"')
+            st.session_state["garmin_password"] = os.getenv("GARMIN_PASSWORD", "").strip().strip('"')
+            # Clean up
+            if "dashboard_password_input" in st.session_state:
+                del st.session_state["dashboard_password_input"]
+        else:
+            st.session_state["credentials_valid"] = False
+            st.session_state["login_error"] = "Incorrect password."
+    
+    st.markdown("## 🔐 Garmin Dashboard")
+    st.markdown("Enter the dashboard password to access your Garmin data.")
+    
+    with st.form("password_form"):
+        st.text_input(
+            "Dashboard Password:", 
+            type="password", 
+            key="dashboard_password_input",
+            placeholder="Enter password"
+        )
+        
+        submitted = st.form_submit_button("🔑 Unlock", use_container_width=True)
+        if submitted:
+            password_entered()
+    
+    if st.session_state.get("login_error"):
+        st.error(f"❌ {st.session_state['login_error']}")
+    
+    return st.session_state.get("credentials_valid", False)
+
+def _check_full_garmin_login():
+    """Show full login form when no preconfigured credentials exist."""
     
     def credentials_entered():
         """Attempts to login with entered credentials."""
@@ -113,12 +179,7 @@ def check_credentials():
         except Exception as e:
             st.session_state["credentials_valid"] = False
             st.session_state["login_error"] = f"Garmin login failed: {str(e)}"
-
-    # Check if already authenticated
-    if st.session_state.get("credentials_valid", False):
-        return True
     
-    # Show login form
     st.markdown("## 🔐 Garmin Dashboard Login")
     st.markdown("Enter your **Garmin Connect** credentials to access the dashboard.")
     
@@ -147,7 +208,6 @@ def check_credentials():
         if submitted:
             credentials_entered()
     
-    # Show error if login failed
     if st.session_state.get("login_error"):
         st.error(f"❌ {st.session_state['login_error']}")
     
