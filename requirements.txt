@@ -1,0 +1,10 @@
+requests
+garminconnect
+python-dotenv
+pandas
+matplotlib
+seaborn
+plotly
+numpy
+streamlit
+altair<5
